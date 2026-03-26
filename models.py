@@ -69,7 +69,7 @@ class ShopConfig(Base):
 
 
 # Database setup
-def get_engine(db_url: str = "sqlite:///ai_receptionist.db"):
+def get_engine(db_url: str = "sqlite:///{}".format(os.path.join("/tmp" if os.getenv("VERCEL") else os.getcwd(), "ai_receptionist.db"))):
     """Create database engine."""
     return create_engine(db_url, echo=False)
 
