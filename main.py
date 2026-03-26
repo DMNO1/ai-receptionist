@@ -21,8 +21,16 @@ load_dotenv()
 
 # --- Database Setup ---
 DB_URL = os.getenv("DATABASE_URL", "sqlite:///ai_receptionist.db")
-db_engine = get_engine(DB_URL)
-init_db(db_engine)  # Initialize tables immediately for reliability
+DB_ENABLED = True
+db_engine = None
+
+try:
+    db_engine = get_engine(DB_URL)
+    init_db(db_engine)
+except Exception as e:
+    print(f"[WARN] Database initialization failed: {e}")
+    print("[WARN] Running in memory-only mode (no persistence)")
+    DB_ENABLED = False
 
 app = FastAPI(title="AI Receptionist", version="1.0.0")
 
@@ -55,6 +63,8 @@ def get_engine_session(session_id: str) -> ConversationEngine:
 
 def persist_conversation(session_id: str, role: str, message: str, intent: str = "", source: str = "web"):
     """Save conversation turn to database."""
+    if not DB_ENABLED or not db_engine:
+        return  # Memory-only mode, skip persistence
     try:
         db = get_session(db_engine)
         record = Conversation(
@@ -143,6 +153,21 @@ async def create_appointment(request: Request):
         if not body.get(field):
             raise HTTPException(400, f"缺少必填字段: {field}")
 
+    # Memory-only mode fallback
+    if not DB_ENABLED or not db_engine:
+        import uuid
+        result = {
+            "id": str(uuid.uuid4())[:8],
+            "customer_name": body["customer_name"],
+            "customer_phone": body["customer_phone"],
+            "service_type": body.get("service_type", ""),
+            "status": "pending",
+            "created_at": datetime.now().isoformat(),
+            "message": "预约已记录（内存模式，重启后数据丢失）"
+        }
+        await wecom_handler.notify_boss_new_appointment(body)
+        return JSONResponse(result, status_code=201)
+
     db = get_session(db_engine)
     try:
         appointment = Appointment(
@@ -184,6 +209,9 @@ async def list_appointments(
     offset: int = 0
 ):
     """List appointments with optional status filter."""
+    if not DB_ENABLED or not db_engine:
+        return {"total": 0, "appointments": [], "note": "内存模式，无持久化数据"}
+
     db = get_session(db_engine)
     try:
         query = db.query(Appointment)
@@ -246,6 +274,25 @@ async def update_appointment(appointment_id: int, request: Request):
 @app.get("/api/dashboard/stats")
 async def dashboard_stats():
     """Get dashboard statistics."""
+    if not DB_ENABLED or not db_engine:
+        return {
+            "summary": {
+                "total_appointments": 0,
+                "pending_appointments": 0,
+                "confirmed_appointments": 0,
+                "completed_appointments": 0,
+                "today_appointments": 0,
+                "week_appointments": 0,
+                "total_conversations": 0,
+                "today_conversations": 0,
+                "conversion_rate": 0,
+            },
+            "service_breakdown": {},
+            "source_breakdown": {},
+            "recent_appointments": [],
+            "note": "内存模式运行，数据不持久化"
+        }
+
     db = get_session(db_engine)
     try:
         today = datetime.now().strftime("%Y-%m-%d")
@@ -331,6 +378,13 @@ async def dashboard_stats():
 @app.get("/api/dashboard/daily")
 async def daily_stats(days: int = 7):
     """Get daily stats for the past N days."""
+    if not DB_ENABLED or not db_engine:
+        results = []
+        for i in range(days):
+            date = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            results.append({"date": date, "conversations": 0, "appointments": 0})
+        return {"daily_stats": list(reversed(results)), "note": "内存模式运行"}
+
     db = get_session(db_engine)
     try:
         results = []
@@ -394,7 +448,7 @@ async def health():
         "shop_name": engine.shop_config.get("shop_name", ""),
         "llm_configured": bool(DEEPSEEK_API_KEY),
         "services_count": len(engine.shop_config.get("services", [])),
-        "database": "connected",
+        "database": "connected" if DB_ENABLED else "memory-only",
     }
 
 
