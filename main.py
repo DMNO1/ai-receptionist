@@ -20,7 +20,12 @@ from wecom import wecom_handler
 load_dotenv()
 
 # --- Database Setup ---
-DB_URL = os.getenv("DATABASE_URL", "sqlite:///ai_receptionist.db")
+# Vercel serverless: use /tmp for writable storage
+if os.getenv("VERCEL") or os.getenv("VERCEL_ENV"):
+    _tmp_db = "/tmp/ai_receptionist.db"
+    DB_URL = os.getenv("DATABASE_URL", f"sqlite:///{_tmp_db}")
+else:
+    DB_URL = os.getenv("DATABASE_URL", "sqlite:///ai_receptionist.db")
 DB_ENABLED = True
 db_engine = None
 

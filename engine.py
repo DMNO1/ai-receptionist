@@ -20,10 +20,36 @@ class ConversationEngine:
         self.conversation_history: list[dict] = []
 
     def _load_shop_config(self) -> dict:
-        config_path = KNOWLEDGE_DIR / "shop_config.json"
-        if config_path.exists():
-            return json.loads(config_path.read_text(encoding="utf-8"))
-        return {}
+        """Load shop config with fallback to default."""
+        try:
+            config_path = KNOWLEDGE_DIR / "shop_config.json"
+            if config_path.exists():
+                return json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"[Engine] Config load error: {e}")
+        
+        # Fallback default config
+        return {
+            "shop_name": "AI智能客服",
+            "greeting": "您好！欢迎来到我们的店铺，请问有什么可以帮您？",
+            "fallback": "抱歉，这个问题我暂时无法回答，请拨打我们的电话咨询。",
+            "contact": {
+                "phone": "400-123-4567",
+                "wechat": "shop_wechat",
+                "address": "请到店咨询具体地址"
+            },
+            "business_hours": {
+                "weekday": "08:00-18:00",
+                "weekend": "09:00-17:00",
+                "holiday": "10:00-16:00"
+            },
+            "services": [
+                {"id": "svc1", "name": "常规保养", "price_range": "200-500", "duration": "1-2小时", "description": "机油更换、滤芯更换等"},
+                {"id": "svc2", "name": "故障检修", "price_range": "100-1000", "duration": "视情况而定", "description": "故障诊断与维修"},
+            ],
+            "highlights": ["专业技师", "原厂配件", "质保服务"],
+            "appointment_questions": ["您的姓名", "联系电话", "需要什么服务", "车型信息"]
+        }
 
     def detect_intent(self, user_message: str) -> dict:
         """Detect user intent from message using keyword matching."""

@@ -6,9 +6,9 @@
     }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "main.py" },
-    { "src": "/dashboard", "dest": "main.py" },
-    { "src": "/wecom/(.*)", "dest": "main.py" },
-    { "src": "/(.*)", "dest": "main.py" }
+    {
+      "src": "/(.*)",
+      "dest": "main.py"
+    }
   ]
 }
