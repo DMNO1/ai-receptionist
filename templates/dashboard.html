@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>老板看板 - AI接待员</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+               background: #f0f2f5; color: #333; }
+        .container { max-width: 960px; margin: 0 auto; padding: 20px; }
+        
+        header { display: flex; justify-content: space-between; align-items: center;
+                 margin-bottom: 24px; padding: 16px 20px; background: #fff;
+                 border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+        header h1 { font-size: 20px; }
+        header nav { display: flex; gap: 16px; }
+        header nav a { color: #1976d2; text-decoration: none; font-size: 14px; }
+        
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+                      gap: 12px; margin-bottom: 24px; }
+        .stat-card { background: #fff; border-radius: 12px; padding: 16px; text-align: center;
+                     box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+        .stat-card .value { font-size: 28px; font-weight: 700; color: #4caf50; }
+        .stat-card .label { font-size: 12px; color: #888; margin-top: 4px; }
+        .stat-card.warn .value { color: #ff9800; }
+        .stat-card.info .value { color: #2196f3; }
+        
+        .section { background: #fff; border-radius: 12px; padding: 20px;
+                   box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 24px; }
+        .section h2 { font-size: 16px; margin-bottom: 16px; color: #555; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #f0f0f0; }
+        th { font-weight: 600; color: #666; font-size: 13px; }
+        td { font-size: 14px; }
+        
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+        .badge-pending { background: #fff3e0; color: #e65100; }
+        .badge-confirmed { background: #e3f2fd; color: #1565c0; }
+        .badge-completed { background: #e8f5e9; color: #2e7d32; }
+        .badge-cancelled { background: #f5f5f5; color: #888; }
+        
+        .chart-placeholder { height: 120px; background: #fafafa; border-radius: 8px;
+                             display: flex; align-items: center; justify-content: center;
+                             color: #ccc; font-size: 14px; }
+        
+        .loading { text-align: center; padding: 40px; color: #999; }
+        .error { text-align: center; padding: 20px; color: #f44336; }
+        
+        @media (max-width: 600px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .container { padding: 12px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>📊 老板看板</h1>
+        <nav>
+            <a href="/">💬 聊天</a>
+            <a href="/dashboard">📊 看板</a>
+        </nav>
+    </header>
+    
+    <div class="stats-grid" id="stats">
+        <div class="loading">加载中...</div>
+    </div>
+    
+    <div class="section">
+        <h2>📋 最近预约</h2>
+        <table>
+            <thead><tr><th>ID</th><th>客户</th><th>电话</th><th>服务</th><th>状态</th><th>时间</th></tr></thead>
+            <tbody id="appointments"><tr><td colspan="6" class="loading">加载中...</td></tr></tbody>
+        </table>
+    </div>
+    
+    <div class="section">
+        <h2>📈 每日趋势（近7天）</h2>
+        <div id="daily-chart">
+            <div class="chart-placeholder">图表加载中...</div>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>🔧 服务分布</h2>
+        <div id="service-breakdown">
+            <div class="loading">加载中...</div>
+        </div>
+    </div>
+</div>
+
+<script>
+const statusLabels = {
+    pending: '待确认', confirmed: '已确认', completed: '已完成', cancelled: '已取消'
+};
+
+async function loadDashboard() {
+    try {
+        const [statsRes, dailyRes] = await Promise.all([
+            fetch('/api/dashboard/stats'),
+            fetch('/api/dashboard/daily?days=7')
+        ]);
+        const stats = await statsRes.json();
+        const daily = await dailyRes.json();
+        
+        renderStats(stats.summary);
+        renderAppointments(stats.recent_appointments);
+        renderDaily(daily.daily_stats);
+        renderServices(stats.service_breakdown);
+    } catch (e) {
+        document.getElementById('stats').innerHTML = '<div class="error">加载失败: ' + e.message + '</div>';
+    }
+}
+
+function renderStats(s) {
+    document.getElementById('stats').innerHTML = `
+        <div class="stat-card"><div class="value">${s.total_conversations}</div><div class="label">总对话数</div></div>
+        <div class="stat-card info"><div class="value">${s.today_conversations}</div><div class="label">今日对话</div></div>
+        <div class="stat-card"><div class="value">${s.total_appointments}</div><div class="label">总预约</div></div>
+        <div class="stat-card warn"><div class="value">${s.pending_appointments}</div><div class="label">待确认</div></div>
+        <div class="stat-card"><div class="value">${s.completed_appointments}</div><div class="label">已完成</div></div>
+        <div class="stat-card info"><div class="value">${s.conversion_rate}%</div><div class="label">转化率</div></div>
+    `;
+}
+
+function renderAppointments(list) {
+    if (!list || list.length === 0) {
+        document.getElementById('appointments').innerHTML = '<tr><td colspan="6" class="loading">暂无预约</td></tr>';
+        return;
+    }
+    document.getElementById('appointments').innerHTML = list.map(a => `
+        <tr>
+            <td>${a.id}</td>
+            <td>${a.customer_name}</td>
+            <td>-</td>
+            <td>${a.service_type || '未指定'}</td>
+            <td><span class="badge badge-${a.status}">${statusLabels[a.status] || a.status}</span></td>
+            <td>${new Date(a.created_at).toLocaleString('zh-CN')}</td>
+        </tr>
+    `).join('');
+}
+
+function renderDaily(data) {
+    if (!data || data.length === 0) {
+        document.getElementById('daily-chart').innerHTML = '<div class="chart-placeholder">暂无数据</div>';
+        return;
+    }
+    const max = Math.max(...data.map(d => Math.max(d.conversations, d.appointments)), 1);
+    const bars = data.map(d => {
+        const ch = Math.round(d.conversations / max * 100);
+        const ap = Math.round(d.appointments / max * 100);
+        return `<div style="display:flex;flex-direction:column;align-items:center;flex:1">
+            <div style="display:flex;gap:2px;align-items:flex-end;height:80px">
+                <div style="width:16px;height:${ch}%;background:#4caf50;border-radius:2px" title="对话:${d.conversations}"></div>
+                <div style="width:16px;height:${ap}%;background:#2196f3;border-radius:2px" title="预约:${d.appointments}"></div>
+            </div>
+            <div style="font-size:11px;color:#888;margin-top:4px">${d.date.slice(5)}</div>
+        </div>`;
+    }).join('');
+    document.getElementById('daily-chart').innerHTML = `<div style="display:flex;gap:4px">${bars}</div>
+        <div style="display:flex;gap:16px;justify-content:center;margin-top:8px;font-size:12px;color:#888">
+            <span>■ 对话</span><span style="color:#2196f3">■ 预约</span></div>`;
+}
+
+function renderServices(breakdown) {
+    if (!breakdown || Object.keys(breakdown).length === 0) {
+        document.getElementById('service-breakdown').innerHTML = '<div class="loading">暂无数据</div>';
+        return;
+    }
+    const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
+    const rows = Object.entries(breakdown).map(([name, count]) => {
+        const pct = Math.round(count / total * 100);
+        return `<tr><td>${name}</td><td>${count}</td><td>${pct}%</td></tr>`;
+    }).join('');
+    document.getElementById('service-breakdown').innerHTML = `<table>
+        <thead><tr><th>服务类型</th><th>预约数</th><th>占比</th></tr></thead>
+        <tbody>${rows}</tbody></table>`;
+}
+
+loadDashboard();
+setInterval(loadDashboard, 30000);
+</script>
+</body>
+</html>
