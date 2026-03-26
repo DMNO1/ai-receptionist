@@ -2,6 +2,7 @@
 AI Receptionist — 数据库模型
 SQLite持久化：预约、对话记录、统计
 """
+import os
 from datetime import datetime
 from sqlalchemy import (
     create_engine, Column, Integer, String, Text, DateTime, Float, Boolean
