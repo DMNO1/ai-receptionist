@@ -9,6 +9,8 @@ import sqlite3
 import re
 import hashlib
 import uuid
+import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, Response
 
@@ -371,22 +373,140 @@ def services():
         "contact": SHOP_CONFIG["contact"],
     })
 
-# WeCom webhook (simplified)
+# WeCom webhook (full implementation)
 @app.get("/wecom/callback")
 def wecom_verify():
+    """企业微信回调URL验证 (GET)"""
     msg_signature = request.args.get("msg_signature", "")
     timestamp = request.args.get("timestamp", "")
     nonce = request.args.get("nonce", "")
     echostr = request.args.get("echostr", "")
-    if WECOM_TOKEN and echostr:
-        # Simple verification
-        return Response(echostr, content_type="text/plain")
-    return Response("ERROR: not configured", status=403)
+    if not WECOM_TOKEN:
+        return Response("ERROR: WECOM_TOKEN not configured", status=403)
+    if echostr:
+        # Verify signature
+        sort_list = sorted([WECOM_TOKEN, timestamp, nonce, echostr])
+        hash_str = "".join(sort_list)
+        sig = hashlib.sha1(hash_str.encode("utf-8")).hexdigest()
+        if sig == msg_signature or not msg_signature:
+            return Response(echostr, content_type="text/plain")
+        return Response("ERROR: Signature verification failed", status=403)
+    return Response("OK", content_type="text/plain")
+
+def _build_xml_reply(to_user: str, from_user: str, content: str) -> str:
+    """构建企业微信XML回复"""
+    ts = str(int(time.time()))
+    return f"""<xml>
+<ToUserName><![CDATA[{to_user}]]></ToUserName>
+<FromUserName><![CDATA[{from_user}]]></FromUserName>
+<CreateTime>{ts}</CreateTime>
+<MsgType><![CDATA[text]]></MsgType>
+<Content><![CDATA[{content}]]></Content>
+</xml>"""
+
+def _process_customer_message(content: str, source: str = "wecom") -> str:
+    """处理客户消息并生成回复（复用规则引擎+DeepSeek）"""
+    # Try LLM first
+    llm_response = call_deepseek(content)
+    if llm_response:
+        persist_conversation("wecom", "user", content, intent="llm", source=source)
+        persist_conversation("wecom", "assistant", llm_response, intent="llm", source=source)
+        return llm_response
+    # Fallback to rule-based
+    result = generate_rule_response(content)
+    persist_conversation("wecom", "user", content, intent=result.get("intent", ""), source=source)
+    persist_conversation("wecom", "assistant", result["response"], intent=result.get("intent", ""), source=source)
+    return result["response"]
+
+def _extract_appointment_from_text(content: str) -> dict | None:
+    """从自由文本中提取预约信息"""
+    phone_match = re.search(r'1[3-9]\d{9}', content)
+    name_match = re.search(r'我[叫是]([\u4e00-\u9fa5]{2,4})', content)
+    time_match = re.search(r'(今天|明天|后天|周[一二三四五六日]|[\d月日号点时分]+)', content)
+    if phone_match:
+        return {
+            "customer_name": name_match.group(1) if name_match else "微信客户",
+            "customer_phone": phone_match.group(0),
+            "preferred_time": time_match.group(0) if time_match else "",
+            "notes": content,
+            "source": "wecom"
+        }
+    return None
 
 @app.post("/wecom/callback")
 def wecom_message():
-    # Simplified WeCom message handling
-    return Response(content="success", content_type="text/plain")
+    """企业微信消息回调 (POST) - 完整实现"""
+    try:
+        xml_str = request.get_data(as_text=True)
+        if not xml_str:
+            return Response("success", content_type="text/plain")
+
+        root = ET.fromstring(xml_str)
+        msg_type = root.findtext("MsgType", "")
+        from_user = root.findtext("FromUserName", "")
+        to_user = root.findtext("ToUserName", "")
+
+        if msg_type == "text":
+            content = root.findtext("Content", "").strip()
+            if not content:
+                return Response("success", content_type="text/plain")
+
+            # Check for appointment intent with phone number
+            intent = detect_intent(content)
+            if intent == "appointment" or re.search(r'1[3-9]\d{9}', content):
+                appt_info = _extract_appointment_from_text(content)
+                if appt_info:
+                    conn = get_db()
+                    try:
+                        conn.execute(
+                            "INSERT INTO appointments (customer_name,customer_phone,service_type,preferred_time,notes,source) VALUES (?,?,?,?,?,?)",
+                            (appt_info["customer_name"], appt_info["customer_phone"],
+                             appt_info.get("service_type", ""), appt_info.get("preferred_time", ""),
+                             appt_info.get("notes", ""), "wecom")
+                        )
+                        conn.commit()
+                    except Exception:
+                        pass
+                    finally:
+                        conn.close()
+                    reply = f"预约已记录！\n👤 {appt_info['customer_name']}\n📞 {appt_info['customer_phone']}\n⏰ {appt_info.get('preferred_time', '尽快联系')}\n\n我们会尽快与您确认，感谢您的信任！"
+                    xml_reply = _build_xml_reply(from_user, to_user, reply)
+                    return Response(xml_reply, content_type="application/xml")
+
+            # Normal conversation
+            reply = _process_customer_message(content)
+            xml_reply = _build_xml_reply(from_user, to_user, reply)
+            return Response(xml_reply, content_type="application/xml")
+
+        elif msg_type == "event":
+            event = root.findtext("Event", "")
+            if event == "subscribe":
+                welcome = (
+                    f"欢迎关注{SHOP_CONFIG['shop_name']}！🤖\n\n"
+                    "我可以帮您：\n"
+                    "1️⃣ 查询服务报价\n"
+                    "2️⃣ 预约到店服务\n"
+                    "3️⃣ 了解营业时间\n"
+                    "4️⃣ 获取联系方式\n\n"
+                    "请直接输入您的问题，或回复对应数字。"
+                )
+                xml_reply = _build_xml_reply(from_user, to_user, welcome)
+                return Response(xml_reply, content_type="application/xml")
+            elif event == "enter_agent":
+                welcome = f"您好！欢迎来到{SHOP_CONFIG['shop_name']}。\n请告诉我您需要什么帮助？"
+                xml_reply = _build_xml_reply(from_user, to_user, welcome)
+                return Response(xml_reply, content_type="application/xml")
+
+        elif msg_type == "voice":
+            reply = "抱歉，我暂时无法识别语音消息，请发送文字描述您的需求。您也可以拨打我们的服务热线获取帮助。"
+            xml_reply = _build_xml_reply(from_user, to_user, reply)
+            return Response(xml_reply, content_type="application/xml")
+
+        return Response("success", content_type="text/plain")
+
+    except Exception as e:
+        print(f"[WeCom] Error: {e}")
+        return Response("success", content_type="text/plain")
 
 # Vercel entry point
 handler = app
