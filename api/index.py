@@ -116,7 +116,7 @@ def generate_rule_response(text: str) -> dict:
     else:
         return {"response": "感谢您的消息！请问您需要了解哪方面的信息？我可以帮您查报价、预约到店或解答疑问。", "intent": "unknown", "quick_replies": SHOP_CONFIG["quick_replies"]}
 
-async def call_deepseek(user_message: str) -> str:
+def call_deepseek(user_message: str) -> str:
     """Call DeepSeek for LLM response. Returns None on failure."""
     if not DEEPSEEK_API_KEY:
         return None
@@ -127,8 +127,8 @@ async def call_deepseek(user_message: str) -> str:
 营业时间：{json.dumps(SHOP_CONFIG['business_hours'], ensure_ascii=False)}
 联系方式：{json.dumps(SHOP_CONFIG['contact'], ensure_ascii=False)}
 请用简洁的中文回复，控制在100字以内。"""
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
                 DEEPSEEK_API_URL,
                 headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
                 json={"model": "deepseek-chat", "messages": [
@@ -224,7 +224,7 @@ def dashboard():
     return DASHBOARD_HTML
 
 @app.post("/api/chat")
-async def chat():
+def chat():
     body = request.get_json()
     user_message = body.get("message", "").strip()
     session_id = body.get("session_id", "default")
@@ -234,7 +234,7 @@ async def chat():
     persist_conversation(session_id, "user", user_message, source="web")
 
     # Try LLM first
-    llm_response = await call_deepseek(user_message)
+    llm_response = call_deepseek(user_message)
     if llm_response:
         result = {"response": llm_response, "intent": "llm", "quick_replies": SHOP_CONFIG["quick_replies"], "timestamp": datetime.now().isoformat()}
     else:
